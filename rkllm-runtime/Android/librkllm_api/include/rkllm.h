@@ -1,6 +1,6 @@
 #ifndef _RKLLM_H_
 #define _RKLLM_H_
-#include <stdint.h>
+#include <cstdint>
 
 #ifdef __cplusplus
 extern "C" {
