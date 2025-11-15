@@ -11,6 +11,7 @@ from pathlib import Path
 
 # Set the address of the Server.
 server_url = 'http://192.168.2.30:8080/rkllm_chat'
+# server_url = 'http://192.168.2.44:8080/v1/chat/completions'
 # server_url = 'http://[240e:390:34a:ce10:24d4:f0ff:fe25:ae43]:8080/rkllm_chat'
 
 # Create a session object.
@@ -204,14 +205,18 @@ def main_demo2(is_streaming=True):
     print('\n')
 
 
-def main_demo3_multimodal(image_path=None, is_streaming=True, silent=False):
+def main_demo3_multimodal(image_path=None, is_streaming=True, silent=False, user_question=None):
     """
-    Demo for multimodal inference with image input.
+    Demo for multimodal inference with image input (supports single or multiple images).
     
     Args:
-        image_path: Path to the image file. If None, will prompt user to input.
+        image_path: Path to the image file(s). Can be:
+                   - None: will prompt user to input
+                   - str: single image path
+                   - list: multiple image paths
         is_streaming: Whether to use streaming mode.
         silent: If True, suppress print output and return result instead.
+        user_question: The question to ask about the image(s).
     
     Returns:
         If silent=True, returns the model's response text. Otherwise returns None.
@@ -221,79 +226,86 @@ def main_demo3_multimodal(image_path=None, is_streaming=True, silent=False):
         print("RKLLM 多模态推理演示 (图片 + 文本)...")
         print("============================")
     
-    # Get image path if not provided
+    # Normalize image_path to a list
     if image_path is None:
-        image_path = input("\n*请输入图片文件路径: ")
-    
-    # Check if image exists
-    if not os.path.exists(image_path):
+        image_path_input = input("\n*请输入图片文件路径 (多个路径用逗号分隔): ")
+        image_paths = [path.strip() for path in image_path_input.split(',')]
+    elif isinstance(image_path, str):
+        image_paths = [image_path]
+    elif isinstance(image_path, list):
+        image_paths = image_path
+    else:
         if not silent:
-            print(f"错误: 找不到图片文件: {image_path}")
+            print(f"错误: image_path 参数类型不正确，应为 str 或 list")
         return None
     
-
-    # Read original image
-    with open(image_path, 'rb') as f:
-        image_data = f.read()
+    # Process each image
+    image_data_uris = []
+    for img_path in image_paths:
+        # Check if image exists
+        if not os.path.exists(img_path):
+            if not silent:
+                print(f"错误: 找不到图片文件: {img_path}")
+            return None
+        
+        # Read original image
+        try:
+            with open(img_path, 'rb') as f:
+                image_data = f.read()
+            
+            # Encode image to base64
+            image_base64 = base64.b64encode(image_data).decode('utf-8')
+            
+            # Add data URI prefix for proper format
+            # Detect image format from file extension
+            ext = os.path.splitext(img_path)[1].lower()
+            mime_type = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp'
+            }.get(ext, 'image/jpeg')
+            
+            image_data_uri = f"data:{mime_type};base64,{image_base64}"
+            image_data_uris.append(image_data_uri)
+            
+            if not silent:
+                print(f"图片加载成功: {img_path}")
+                print(f"图片大小: {len(image_data)} bytes")
+            
+        except Exception as e:
+            if not silent:
+                print(f"图片编码失败 ({img_path}): {e}")
+            return None
     
-    # Encode image to base64
-    try:
-        image_base64 = base64.b64encode(image_data).decode('utf-8')
-        
-        # Add data URI prefix for proper format (optional, server handles both)
-        # Detect image format from file extension
-        ext = os.path.splitext(image_path)[1].lower()
-        mime_type = {
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.png': 'image/png',
-            '.gif': 'image/gif',
-            '.webp': 'image/webp'
-        }.get(ext, 'image/jpeg')
-        
-        image_data_uri = f"data:{mime_type};base64,{image_base64}"
-        
-        if not silent:
-            print(f"图片加载成功: {image_path}")
-            print(f"图片大小: {len(image_data)} bytes")
-        
-    except Exception as e:
-        if not silent:
-            print(f"图片编码失败: {e}")
-        return None
+    if not silent:
+        print(f"共加载 {len(image_data_uris)} 张图片")
     
-    # Get user's question about the image
-    # user_question = input("\n*请输入关于这张图片的问题: ")
-    # if not user_question:
-    #     user_question = "请描述这张图片的内容。"  # Default question
-
-    user_question = """根据当前监控画面判断以下3个问题（忽略OSD信息），答案只能是1或0。
-
-    问题1：是否有车牌号出现在手机屏幕上？
-    问题2：是否有车牌号出现在打印的纸张上？
-    问题3：是否有人手持车牌？
-
-    输出格式示例：0,1,0（只输出3个数字和2个逗号，不要其他内容）
-
-    当前画面的答案："""
+    # Prepare multimodal message content
+    # Start with text
+    content = [
+        {
+            "type": "text",
+            "text": user_question
+        }
+    ]
+    
+    # Add all images
+    for image_data_uri in image_data_uris:
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": image_data_uri
+            }
+        })
     
     # Prepare multimodal message
-    # Format 1: Using image_url (OpenAI compatible format)
+    # Format: Using image_url (OpenAI compatible format)
     messages = [
         {
             "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": user_question
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": image_data_uri
-                    }
-                }
-            ]
+            "content": content
         }
     ]
     
@@ -324,7 +336,8 @@ def main_demo3_multimodal(image_path=None, is_streaming=True, silent=False):
         "messages": messages,
         "stream": is_streaming,
         "enable_thinking": False,
-        "tools": None
+        "tools": None,
+        "temperature": 0
     }
     
     if not silent:
@@ -356,13 +369,34 @@ def main_demo3_multimodal(image_path=None, is_streaming=True, silent=False):
                 result_text = ""
                 for line in responses.iter_lines():
                     if line:
-                        line = json.loads(line.decode('utf-8'))
-                        if line["choices"][-1]["finish_reason"] != "stop":
-                            content = line["choices"][-1]["delta"]["content"]
-                            result_text += content
-                            if not silent:
-                                print(content, end="")
-                                sys.stdout.flush()
+                        line_str = line.decode('utf-8')
+                        # 处理SSE格式，去掉 "data: " 前缀
+                        if line_str.startswith('data: '):
+                            line_str = line_str[6:]  # 去掉 "data: " 前缀
+                        # 跳过 [DONE] 标记
+                        if line_str.strip() == '[DONE]':
+                            continue
+                        try:
+                            line = json.loads(line_str)
+                            # 检查是否有 choices 字段
+                            if "choices" not in line or not line["choices"]:
+                                continue
+                            # 获取最后一个choice
+                            choice = line["choices"][-1]
+                            # 检查 finish_reason
+                            if choice.get("finish_reason") == "stop":
+                                continue
+                            # 获取 content
+                            if "delta" in choice and "content" in choice["delta"]:
+                                content = choice["delta"]["content"]
+                                if content:  # 只有当 content 不为 None 和空字符串时才处理
+                                    result_text += content
+                                    if not silent:
+                                        print(content, end="")
+                                        sys.stdout.flush()
+                        except (json.JSONDecodeError, KeyError) as e:
+                            # 跳过无法解析或格式不正确的消息
+                            continue
                 if not silent:
                     print()  # New line after streaming
                 else:
@@ -481,7 +515,7 @@ def draw_text_on_image(image_path, text, output_path):
         traceback.print_exc()
         return False
 
-def batch_process_folders(folder_paths, output_base_dir=None, is_streaming=False):
+def batch_process_folders(folder_paths, output_base_dir=None, is_streaming=False, user_question=None):
     """
     批量处理多个文件夹中的图片
     
@@ -562,7 +596,8 @@ def batch_process_folders(folder_paths, output_base_dir=None, is_streaming=False
                 result = main_demo3_multimodal(
                     image_path=str(image_file),
                     is_streaming=is_streaming,
-                    silent=True
+                    silent=True, 
+                    user_question=user_question
                 )
                 
                 if result:
@@ -728,6 +763,7 @@ def test_draw_text(image_path, text="0,1,0"):
 
 if __name__ == '__main__':
     
+    
     ## Demo0: 列出系统字体（调试用）
     # list_system_fonts()
     
@@ -737,9 +773,70 @@ if __name__ == '__main__':
     ## Demo2: RKLLM function-call
     # main_demo2(True)
     
+       # Get user's question about the image
+  
+    user_question = input("\n*请输入关于这张图片的问题: ")
+
+    if not user_question :
+
+        # user_question = """根据当前监控画面，请仔细思考以后回答以下3个问题（忽略监控画面叠加字符）：
+
+        # 1. 仔细观察画面中是否有人拿着车牌？→ ifPlateHold
+        # 2. 仔细观察画面中是否有车牌号码出现在手机屏幕或者纸张上？→ ifOnPhoneOrPaper
+        # 3. 仔细观察画面中的主体对象是否是二轮车或者三轮车？→ ifTwoWheelOrThreeWheel
+
+        # 回答要求：
+        # - 用"1"代表"True"，"0"代表"False"
+        # - 输出ifPlateHold, ifOnPhoneOrPaper, ifTwoWheelOrThreeWheel的值，用逗号分隔
+
+        # 当前画面的答案："""
+        user_question = """你是一个停车场出入口监控图像分析专家，需要识别伪造车牌行为。请仔细观察监控画面（忽略画面中的文字水印和时间戳），针对以下4种伪造场景进行检测：
+
+【检测场景定义】
+场景1（hand_held） - 手持车牌：有人用手拿着、举着或握着车牌（无论是完整车牌还是车牌照片）
+场景2（electronic_screen） - 电子屏幕显示：车牌图像显示在手机、平板、电脑等电子设备的屏幕上
+场景3（paper_print） - 纸张打印：车牌图像印刷或打印在纸张、卡片等平面材质上（非金属车牌）
+场景4（non_motor_vehicle） - 非机动车挂牌：车牌安装在两轮车（摩托车、电动车、自行车）或三轮车上，而非标准四轮机动车
+
+【判断标准】
+✓ 正常情况：车牌应该安装在四轮机动车（轿车、SUV、卡车等）的前部或后部固定位置
+✗ 异常情况：任何符合上述4种场景的情况都属于伪造行为
+
+【分析要点】
+- 重点观察车牌的材质、反光特性、安装位置和周围环境
+- 注意识别人手、电子设备边框、纸张边缘、车辆类型等特征
+- 电子屏幕通常有亮度、反光、像素点等特征
+- 纸张打印品通常较平整、无金属光泽
+- 区分二轮/三轮车与四轮机动车的车身结构
+
+【输出格式】
+请严格按照顺序以逗号分隔输出hand_held，electronic_screen，paper_print，non_motor_vehicle的值（不要输出其他解释文字）。
+取值说明：0表示否/正常，1表示是/异常"""
+
+
+
+    user_question="""车辆比对：判断图1和图2的主体车辆是否为同一辆车，必须忽略车牌。
+
+【判断标准】
+1. 车身颜色
+2. 车辆轮廓
+3. 大灯和日行灯造型
+4. 前脸特征
+
+【注意事项】
+- 注意如果图片为夜间拍摄，可能无法拍出真实颜色。
+- 注意如果图片为夜间拍摄，可能大灯为开启状态，会对白天未开启状态的比较造成干扰。
+- 注意两张图的相机拍摄视角可能不同。
+
+【输出格式】
+请判断是否为同一辆车，如不是请给出简单的理由"""
+# 请输出是否为同一辆车，只需要回答是或者否"""
+
+
     ## Demo3: RKLLM multimodal inference (image + text)
     # Example usage with specific image path:
-    main_demo3_multimodal(image_path="/Users/shaoben/Downloads/ScreenShot_2025-10-24_092054_230.png", is_streaming=True)
+    main_demo3_multimodal(image_path=["/Users/shaoben/Downloads/car_match/ParkingBox_22040209110253600_2023-02-20_23021623364748867.jpg", 
+                                      "/Users/shaoben/Downloads/car_match/ParkingBox_19052313413915688_2023-02-20_23021900024450740.jpg"], is_streaming=True, user_question=user_question)
     # Or let user input image path:
     # main_demo3_multimodal(is_streaming=True)
     
@@ -747,10 +844,16 @@ if __name__ == '__main__':
     # 建议先运行这个测试，确认字体大小合适后再运行批量处理
     # test_draw_text("/Users/shaoben/Downloads/fakeplate/1759577964133192.168.2.248_浙JN21Z6_蓝色.jpg", "0,1,0")
     
-    ## Demo4: Batch process folders
+    # Demo4: Batch process folders
     # folder_paths = [
-    #     "/Users/shaoben/output/"
+    #     "/Users/shaoben/Downloads/fakeplate/1001", 
+    #     # "/Users/shaoben/Downloads/fakeplate/室内防伪测试结果/C5H-0811",
+    #     # "/Users/shaoben/Downloads/fakeplate/室内防伪测试结果/R5H-0930",
+    #     # "/Users/shaoben/Downloads/fakeplate/室内防伪测试结果/R5L-0916",
+    #     # "/Users/shaoben/Downloads/fakeplate/real_plate",
+    #     # "/Users/shaoben/Downloads/fakeplate/1111",
+        
     # ]
-    # batch_process_folders(folder_paths, is_streaming=False)
+    # batch_process_folders(folder_paths, is_streaming=False, user_question=user_question)
     
 
